@@ -10,7 +10,7 @@ The WCAG AI Copilot is built as a highly decoupled, modern AI-native web applica
 
 ```mermaid
 graph TD
-    subgraph Frontend (React + TypeScript)
+    subgraph "Frontend (React and TypeScript)"
         UI[App.tsx Dashboard]
         Gate[Session Gate / Auth]
         Side[History Sidebar]
@@ -18,30 +18,30 @@ graph TD
         Pane[Advisor Workspace Pane]
     end
 
-    subgraph Backend (FastAPI + Python)
+    subgraph "Backend (FastAPI and Python)"
         API[FastAPI Routers]
         AuthHandler[JWT & Bcrypt Security]
         Scraper[Playwright Scraper]
         Graph[LangGraph Agent Graph]
     end
 
-    subgraph Storage Layer
+    subgraph "Storage Layer"
         Postgres[(PostgreSQL Database)]
         Qdrant[(Qdrant Hybrid Vector DB)]
     end
 
     %% Connections
-    UI -->|Session Init / GET me| API
-    Gate -->|Login & Register Requests| API
-    Side -->|History Queries & Detail Lookups| API
-    QA -->|Chat Messages / POST chat/qa| API
-    Pane -->|Audit Executions / POST chat| API
+    UI -->|Session Init| API
+    Gate -->|Login and Register Requests| API
+    Side -->|History Queries and Detail Lookups| API
+    QA -->|Send Chat Messages| API
+    Pane -->|Execute Code Audits| API
     
-    API -->|Authenticate Sessions & Fetch Logs| Postgres
+    API -->|Authenticate and Fetch Logs| Postgres
     API -->|Query Vector Context| Qdrant
     API -->|Scrape Target HTML| Scraper
     API -->|Execute Agentic Nodes| Graph
-    Graph -->|Retrieve Dense + Sparse Vectors| Qdrant
+    Graph -->|Retrieve Dense and Sparse Vectors| Qdrant
 ```
 
 ---
