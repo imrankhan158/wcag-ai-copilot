@@ -1,0 +1,72 @@
+apiVersion: skaffold/v4beta11
+kind: Config
+metadata:
+  name: wcag-ai-copilot
+build:
+  local:
+    push: false # Do not push to remote registry; load locally into Kind
+  artifacts:
+    - image: wcag-api-gateway
+      context: .
+      docker:
+        dockerfile: services/api-gateway/Dockerfile
+    - image: wcag-auth-service
+      context: .
+      docker:
+        dockerfile: services/auth-service/Dockerfile
+    - image: wcag-audit-service
+      context: .
+      docker:
+        dockerfile: services/audit-service/Dockerfile
+    - image: wcag-qa-service
+      context: .
+      docker:
+        dockerfile: services/qa-service/Dockerfile
+    - image: wcag-history-service
+      context: .
+      docker:
+        dockerfile: services/history-service/Dockerfile
+    - image: wcag-criteria-service
+      context: .
+      docker:
+        dockerfile: services/criteria-service/Dockerfile
+    - image: wcag-ingestion-service
+      context: .
+      docker:
+        dockerfile: services/ingestion-service/Dockerfile
+    - image: wcag-scraper-worker
+      context: .
+      docker:
+        dockerfile: services/scraper-worker/Dockerfile
+    - image: wcag-frontend
+      context: .
+      docker:
+        dockerfile: frontend/Dockerfile
+
+manifests:
+  helm:
+    releases:
+      - name: wcag-copilot
+        chartPath: deploy/charts/wcag-copilot
+        # Bind built image hashes dynamically into Helm templates
+        setValueTemplates:
+          services.api-gateway.image: "{{.IMAGE_FULLY_QUALIFIED_wcag_api_gateway}}"
+          services.auth-service.image: "{{.IMAGE_FULLY_QUALIFIED_wcag_auth_service}}"
+          services.audit-service.image: "{{.IMAGE_FULLY_QUALIFIED_wcag_audit_service}}"
+          services.qa-service.image: "{{.IMAGE_FULLY_QUALIFIED_wcag_qa_service}}"
+          services.history-service.image: "{{.IMAGE_FULLY_QUALIFIED_wcag_history_service}}"
+          services.criteria-service.image: "{{.IMAGE_FULLY_QUALIFIED_wcag_criteria_service}}"
+          services.ingestion-service.image: "{{.IMAGE_FULLY_QUALIFIED_wcag_ingestion_service}}"
+          services.scraper-worker.image: "{{.IMAGE_FULLY_QUALIFIED_wcag_scraper_worker}}"
+          services.frontend.image: "{{.IMAGE_FULLY_QUALIFIED_wcag_frontend}}"
+
+portForward:
+  # Automatically forward services to localhost
+  - resourceType: service
+    resourceName: wcag-copilot-api-gateway
+    port: 8000
+    localPort: 8000
+  - resourceType: service
+    resourceName: wcag-copilot-frontend
+    port: 80
+    localPort: 3001

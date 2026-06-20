@@ -1,0 +1,52 @@
+{{- range $serviceName, $service := .Values.services }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "wcag.fullname" $ }}-{{ $serviceName }}
+  namespace: {{ $.Values.global.namespace }}
+  labels:
+    {{- include "wcag.labels" $ | nindent 4 }}
+    service: {{ $serviceName }}
+spec:
+  replicas: {{ $service.replicaCount }}
+  selector:
+    matchLabels:
+      app: {{ include "wcag.name" $ }}
+      service: {{ $serviceName }}
+  template:
+    metadata:
+      labels:
+        app: {{ include "wcag.name" $ }}
+        service: {{ $serviceName }}
+    spec:
+      containers:
+        - name: {{ $serviceName }}
+          image: "{{ $service.image }}:{{ $service.tag }}"
+          imagePullPolicy: {{ $.Values.global.imagePullPolicy | quote }}
+          {{- if gt (int $service.port) 0 }}
+          ports:
+            - containerPort: {{ $service.port }}
+          {{- end }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "wcag.fullname" $ }}-config
+            - secretRef:
+                name: {{ include "wcag.fullname" $ }}-secrets
+          {{- if $service.hasHealth }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: {{ $service.port }}
+            initialDelaySeconds: 25
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: {{ $service.port }}
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          {{- end }}
+          resources:
+            {{- toYaml $service.resources | nindent 12 }}
+---
+{{- end }}

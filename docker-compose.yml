@@ -1,23 +1,490 @@
+# =============================================================================
+# WCAG AI Copilot — Docker Compose (Local Development / Phase 1)
+# =============================================================================
+
 services:
-  qdrant:
+  # ---------------------------------------------------------------------------
+  # Data stores (Qdrant 3-node cluster)
+  # ---------------------------------------------------------------------------
+  qdrant-node-1:
     image: qdrant/qdrant:latest
-    container_name: wcag-qdrant
+    container_name: wcag-qdrant-1
+    command: ["./qdrant", "--uri", "http://qdrant-node-1:6335"]
+    environment:
+      - QDRANT__CLUSTER__ENABLED=true
     ports:
       - "6333:6333"
       - "6334:6334"
     volumes:
-      - ./data/qdrant:/qdrant/storage
+      - ./data/qdrant-1:/qdrant/storage
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "/bin/bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/6333 && echo -e \"GET /healthz HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n\" >&3 && cat <&3 | grep -q \"200 OK\""]
+      interval: 15s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+  qdrant-node-2:
+    image: qdrant/qdrant:latest
+    container_name: wcag-qdrant-2
+    command: ["./qdrant", "--uri", "http://qdrant-node-2:6335", "--bootstrap", "http://qdrant-node-1:6335"]
+    environment:
+      - QDRANT__CLUSTER__ENABLED=true
+    depends_on:
+      - qdrant-node-1
+    volumes:
+      - ./data/qdrant-2:/qdrant/storage
     restart: unless-stopped
 
-  postgres:
-    image: postgres:17-alpine
-    container_name: wcag-postgres
+  qdrant-node-3:
+    image: qdrant/qdrant:latest
+    container_name: wcag-qdrant-3
+    command: ["./qdrant", "--uri", "http://qdrant-node-3:6335", "--bootstrap", "http://qdrant-node-1:6335"]
     environment:
-      POSTGRES_DB: wcag_ai
+      - QDRANT__CLUSTER__ENABLED=true
+    depends_on:
+      - qdrant-node-1
+    volumes:
+      - ./data/qdrant-3:/qdrant/storage
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Unified PostgreSQL Database (Primary-Replica)
+  # ---------------------------------------------------------------------------
+  postgres-primary:
+    image: postgres:17-alpine
+    container_name: wcag-postgres-primary
+    environment:
+      POSTGRES_DB: wcag_copilot
       POSTGRES_USER: admin
       POSTGRES_PASSWORD: admin123
+      POSTGRES_INITDB_ARGS: "--auth-host=md5"
+    command: |
+      postgres
+      -c wal_level=replica
+      -c max_wal_senders=10
+      -c max_replication_slots=10
+      -c hot_standby=on
     ports:
       - "5432:5432"
     volumes:
-      - ./data/postgres:/var/lib/postgresql/data
+      - ./scripts/init-replication.sh:/docker-entrypoint-initdb.d/init-replication.sh:ro
+      - ./data/postgres-primary:/var/lib/postgresql/data
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d wcag_copilot"]
+      interval: 10s
+      timeout: 5s
+      start_period: 10s
+      retries: 5
+
+  postgres-replica:
+    image: postgres:17-alpine
+    container_name: wcag-postgres-replica
+    depends_on:
+      postgres-primary:
+        condition: service_healthy
+    ports:
+      - "5442:5432"
+    entrypoint: |
+      /bin/sh -c "
+      if [ ! -s /var/lib/postgresql/data/PG_VERSION ]; then
+        until pg_isready -h postgres-primary -U admin; do
+          echo 'Waiting for primary...'
+          sleep 1
+        done
+        echo 'Cloning primary database...'
+        pg_basebackup -h postgres-primary -D /var/lib/postgresql/data -U replicator -Fp -Xs -P -R
+      fi
+      exec docker-entrypoint.sh postgres -c hot_standby=on
+      "
+    environment:
+      PGPASSWORD: replicator_password
+    volumes:
+      - ./data/postgres-replica:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d wcag_copilot"]
+      interval: 10s
+      timeout: 5s
+      start_period: 10s
+      retries: 5
+
+  # ---------------------------------------------------------------------------
+  # Unified PgBouncer Connection Poolers
+  # ---------------------------------------------------------------------------
+  primary-bouncer:
+    image: edoburu/pgbouncer:latest
+    container_name: wcag-primary-bouncer
+    ports:
+      - "6432:5432"
+    environment:
+      - DB_HOST=postgres-primary
+      - DB_PORT=5432
+      - DB_NAME=wcag_copilot
+      - DB_USER=admin
+      - DB_PASSWORD=admin123
+      - POOL_MODE=transaction
+      - MAX_CLIENT_CONN=1000
+      - DEFAULT_POOL_SIZE=25
+    depends_on:
+      postgres-primary:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h localhost -p 5432 -U admin"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  replica-bouncer:
+    image: edoburu/pgbouncer:latest
+    container_name: wcag-replica-bouncer
+    ports:
+      - "6433:5432"
+    environment:
+      - DB_HOST=postgres-replica
+      - DB_PORT=5432
+      - DB_NAME=wcag_copilot
+      - DB_USER=admin
+      - DB_PASSWORD=admin123
+      - POOL_MODE=transaction
+      - MAX_CLIENT_CONN=1000
+      - DEFAULT_POOL_SIZE=25
+    depends_on:
+      postgres-replica:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h localhost -p 5432 -U admin"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  redis:
+    image: redis:7-alpine
+    container_name: wcag-redis
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      start_period: 5s
+      retries: 3
+
+  # ---------------------------------------------------------------------------
+  # AWS-compatible local cloud (LocalStack alternative)
+  # ---------------------------------------------------------------------------
+  floci:
+    image: floci/floci:latest
+    container_name: wcag-floci
+    ports:
+      - "4566:4566"
+    environment:
+      SERVICES: sqs,s3,secretsmanager,sns
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:4566/_localstack/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      start_period: 15s
+      retries: 5
+
+  # ---------------------------------------------------------------------------
+  # One-shot: create SQS queues and S3 buckets in floci
+  # ---------------------------------------------------------------------------
+  aws-init:
+    image: amazon/aws-cli:latest
+    container_name: wcag-aws-init
+    depends_on:
+      floci:
+        condition: service_healthy
+    environment:
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: us-east-1
+      AWS_ENDPOINT_URL: http://floci:4566
+    entrypoint: /bin/sh
+    command: ["/scripts/init-aws.sh"]
+    volumes:
+      - ./scripts:/scripts:ro
+    restart: "no"
+
+  # ---------------------------------------------------------------------------
+  # QA Service — Chatbot RAG (Port 8004)
+  # ---------------------------------------------------------------------------
+  qa-service:
+    build:
+      context: .
+      dockerfile: services/qa-service/Dockerfile
+    container_name: wcag-qa-service
+    env_file:
+      - .env
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      POSTGRES_HOST: primary-bouncer
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: wcag_copilot
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: admin123
+      QDRANT_URL: http://qdrant-node-1:6333
+    depends_on:
+      primary-bouncer:
+        condition: service_healthy
+      qdrant-node-1:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8004/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+
+  # ---------------------------------------------------------------------------
+  # History Service — Reads Audits + Chats (Port 8005)
+  # ---------------------------------------------------------------------------
+  history-service:
+    build:
+      context: .
+      dockerfile: services/history-service/Dockerfile
+    container_name: wcag-history-service
+    env_file:
+      - .env
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      AUDIT_DB_HOST: replica-bouncer
+      AUDIT_DB_PORT: 5432
+      AUDIT_DB_DB: wcag_copilot
+      AUDIT_DB_USER: admin
+      AUDIT_DB_PASSWORD: admin123
+      CONV_DB_HOST: replica-bouncer
+      CONV_DB_PORT: 5432
+      CONV_DB_DB: wcag_copilot
+      CONV_DB_USER: admin
+      CONV_DB_PASSWORD: admin123
+    depends_on:
+      replica-bouncer:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8005/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+
+  # ---------------------------------------------------------------------------
+  # Criteria Service — WCAG Knowledge base Reads (Port 8006)
+  # ---------------------------------------------------------------------------
+  criteria-service:
+    build:
+      context: .
+      dockerfile: services/criteria-service/Dockerfile
+    container_name: wcag-criteria-service
+    env_file:
+      - .env
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      QDRANT_URL: http://qdrant-node-1:6333
+    depends_on:
+      qdrant-node-1:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8006/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+
+  # ---------------------------------------------------------------------------
+  # Ingestion Service — WCAG Knowledge base Seeder (Port 8007)
+  # ---------------------------------------------------------------------------
+  ingestion-service:
+    build:
+      context: .
+      dockerfile: services/ingestion-service/Dockerfile
+    container_name: wcag-ingestion-service
+    ports:
+      - "8007:8007"
+    env_file:
+      - .env
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      QDRANT_URL: http://qdrant-node-1:6333
+    volumes:
+      - ./data/ingestion_cache:/app/services/ingestion-service/data/ingestion_cache
+    depends_on:
+      qdrant-node-1:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8007/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+  # ---------------------------------------------------------------------------
+  # Auth Service — registrar and logins (RS256)
+  # ---------------------------------------------------------------------------
+  auth-service:
+    build:
+      context: .
+      dockerfile: services/auth-service/Dockerfile
+    container_name: wcag-auth-service
+    env_file:
+      - .env
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      POSTGRES_HOST: primary-bouncer
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: wcag_copilot
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: admin123
+    depends_on:
+      primary-bouncer:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8001/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+
+  # ---------------------------------------------------------------------------
+  # API Gateway — JWT validation and edge routing
+  # ---------------------------------------------------------------------------
+  api-gateway:
+    build:
+      context: .
+      dockerfile: services/api-gateway/Dockerfile
+    container_name: wcag-api-gateway
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      AUTH_SERVICE_URL: http://auth-service:8001
+      AUDIT_SERVICE_URL: http://audit-service:8003
+      QA_SERVICE_URL: http://qa-service:8004
+      HISTORY_SERVICE_URL: http://history-service:8005
+      CRITERIA_SERVICE_URL: http://criteria-service:8006
+    depends_on:
+      redis:
+        condition: service_healthy
+      auth-service:
+        condition: service_healthy
+      audit-service:
+        condition: service_healthy
+      qa-service:
+        condition: service_healthy
+      history-service:
+        condition: service_healthy
+      criteria-service:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+
+  # ---------------------------------------------------------------------------
+  # Frontend — React + Vite served by NGINX
+  # ---------------------------------------------------------------------------
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: wcag-frontend
+    ports:
+      - "3001:80"
+    depends_on:
+      - api-gateway
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Scraper Worker — Playwright + SQS + S3
+  # ---------------------------------------------------------------------------
+  scraper-worker:
+    build:
+      context: .
+      dockerfile: services/scraper-worker/Dockerfile
+    container_name: wcag-scraper-worker
+    env_file:
+      - .env
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      AWS_ENDPOINT_URL: http://floci:4566
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: us-east-1
+      SCRAPER_CACHE_BUCKET: wcag-scraper-cache
+      QUEUE_REQUESTS: scrape-requests
+      QUEUE_RESULTS: scrape-results
+    depends_on:
+      redis:
+        condition: service_healthy
+      floci:
+        condition: service_healthy
+      aws-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Audit Service — LangGraph Agent + Hybrid Retrieval
+  # ---------------------------------------------------------------------------
+  audit-service:
+    build:
+      context: .
+      dockerfile: services/audit-service/Dockerfile
+    container_name: wcag-audit-service
+    env_file:
+      - .env
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      AWS_ENDPOINT_URL: http://floci:4566
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: us-east-1
+      POSTGRES_HOST: primary-bouncer
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: wcag_copilot
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: admin123
+      QDRANT_URL: http://qdrant-node-1:6333
+      SCRAPER_CACHE_BUCKET: wcag-scraper-cache
+    depends_on:
+      primary-bouncer:
+        condition: service_healthy
+      qdrant-node-1:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      floci:
+        condition: service_healthy
+      aws-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8003/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3

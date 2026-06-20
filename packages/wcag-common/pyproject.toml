@@ -1,0 +1,40 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "wcag-common"
+version = "0.1.0"
+description = "Shared library for the WCAG AI Copilot microservice platform — models, auth, config, and health checks."
+readme = "README.md"
+requires-python = ">=3.12"
+license = {text = "MIT"}
+authors = [
+    {name = "WCAG AI Copilot Team"},
+]
+
+dependencies = [
+    "pydantic>=2.13.0",
+    "pydantic-settings>=2.14.0",
+    "pyjwt>=2.13.0",
+    "cryptography>=43.0.0",
+    "bcrypt>=4.0.0",
+    "prometheus-client>=0.21.0",
+    "opentelemetry-api>=1.28.0",
+    "opentelemetry-sdk>=1.28.0",
+    "opentelemetry-instrumentation-fastapi>=0.49b0",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.28.0",
+]
+
+[project.optional-dependencies]
+# Install these when you need the health-check router (brings in FastAPI)
+health = ["fastapi>=0.136.0"]
+# All optional deps for development / testing
+dev = [
+    "fastapi>=0.136.0",
+    "pytest>=8.0",
+    "pytest-asyncio>=0.25",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["wcag_common"]

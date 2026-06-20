@@ -1,0 +1,176 @@
+global:
+  namespace: "wcag-production"
+  imagePullPolicy: "Always"
+  environment: "production"
+  secretsName: "wcag-secrets"
+  configMapName: "wcag-config"
+
+# Database & External Services URLs (Dev Defaults)
+config:
+  postgresHost: "primary-bouncer"
+  postgresPort: "5432"
+  redisUrl: "redis://redis:6379/0"
+  qdrantUrl: "http://qdrant-node-1:6333"
+  awsEndpointUrl: "http://localstack:4566"
+  awsDefaultRegion: "us-east-1"
+  openaiBaseUrl: "https://api.openai.com/v1"
+  llmModel: "gpt-4o"
+  embeddingModel: "text-embedding-3-small"
+  embeddingDim: "1536"
+  otelCollectorEndpoint: "http://otel-collector:4317"
+  secretsProvider: "aws"
+  secretsName: "wcag-production-secrets"
+
+services:
+  api-gateway:
+    replicaCount: 3
+    image: "wcag-api-gateway"
+    tag: "latest"
+    port: 8000
+    minReplicas: 3
+    maxReplicas: 20
+    targetCPU: 60
+    hasHealth: true
+    resources:
+      requests:
+        cpu: "100m"
+        memory: "128Mi"
+      limits:
+        cpu: "500m"
+        memory: "256Mi"
+
+  auth-service:
+    replicaCount: 2
+    image: "wcag-auth-service"
+    tag: "latest"
+    port: 8001
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPU: 70
+    hasHealth: true
+    resources:
+      requests:
+        cpu: "100m"
+        memory: "128Mi"
+      limits:
+        cpu: "500m"
+        memory: "256Mi"
+
+  audit-service:
+    replicaCount: 3
+    image: "wcag-audit-service"
+    tag: "latest"
+    port: 8003
+    minReplicas: 3
+    maxReplicas: 30
+    targetCPU: 70
+    hasHealth: true
+    resources:
+      requests:
+        cpu: "500m"
+        memory: "512Mi"
+      limits:
+        cpu: "1.0"
+        memory: "1.0Gi"
+
+  qa-service:
+    replicaCount: 3
+    image: "wcag-qa-service"
+    tag: "latest"
+    port: 8004
+    minReplicas: 3
+    maxReplicas: 20
+    targetCPU: 70
+    hasHealth: true
+    resources:
+      requests:
+        cpu: "250m"
+        memory: "256Mi"
+      limits:
+        cpu: "500m"
+        memory: "512Mi"
+
+  history-service:
+    replicaCount: 2
+    image: "wcag-history-service"
+    tag: "latest"
+    port: 8005
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPU: 70
+    hasHealth: true
+    resources:
+      requests:
+        cpu: "100m"
+        memory: "128Mi"
+      limits:
+        cpu: "500m"
+        memory: "256Mi"
+
+  criteria-service:
+    replicaCount: 2
+    image: "wcag-criteria-service"
+    tag: "latest"
+    port: 8006
+    minReplicas: 2
+    maxReplicas: 5
+    targetCPU: 70
+    hasHealth: true
+    resources:
+      requests:
+        cpu: "100m"
+        memory: "128Mi"
+      limits:
+        cpu: "250m"
+        memory: "256Mi"
+
+  ingestion-service:
+    replicaCount: 1
+    image: "wcag-ingestion-service"
+    tag: "latest"
+    port: 8007
+    minReplicas: 1
+    maxReplicas: 3
+    targetCPU: 80
+    hasHealth: true
+    resources:
+      requests:
+        cpu: "250m"
+        memory: "512Mi"
+      limits:
+        cpu: "1.0"
+        memory: "1.0Gi"
+
+  scraper-worker:
+    replicaCount: 2
+    image: "wcag-scraper-worker"
+    tag: "latest"
+    port: 0  # Daemon, no service
+    minReplicas: 2
+    maxReplicas: 50
+    targetCPU: 80
+    hasHealth: false
+    resources:
+      requests:
+        cpu: "500m"
+        memory: "1.0Gi"
+      limits:
+        cpu: "1.5"
+        memory: "2.0Gi"
+
+  frontend:
+    replicaCount: 2
+    image: "wcag-frontend"
+    tag: "latest"
+    port: 80
+    minReplicas: 2
+    maxReplicas: 5
+    targetCPU: 80
+    hasHealth: true
+    resources:
+      requests:
+        cpu: "50m"
+        memory: "64Mi"
+      limits:
+        cpu: "100m"
+        memory: "128Mi"

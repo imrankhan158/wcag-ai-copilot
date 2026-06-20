@@ -1,0 +1,19 @@
+{{- range $serviceName, $service := .Values.services }}
+{{- if gt (int $service.replicaCount) 1 }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "wcag.fullname" $ }}-{{ $serviceName }}-pdb
+  namespace: {{ $.Values.global.namespace }}
+  labels:
+    {{- include "wcag.labels" $ | nindent 4 }}
+    service: {{ $serviceName }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: {{ include "wcag.name" $ }}
+      service: {{ $serviceName }}
+---
+{{- end }}
+{{- end }}

@@ -1,0 +1,39 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "wcag.fullname" . }}-ingress
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "wcag.labels" . | nindent 4 }}
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+    nginx.ingress.kubernetes.io/use-regex: "true"
+spec:
+  rules:
+    - http:
+        paths:
+          # Route WebSocket traffic directly to QA Service
+          - path: /ws(/.*)?
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "wcag.fullname" . }}-qa-service
+                port:
+                  number: 8004
+          # Route gateway traffic (auth, checks, chats, history)
+          - path: /(api|auth|history|criteria|ingest)(/.*)?
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "wcag.fullname" . }}-api-gateway
+                port:
+                  number: 8000
+          # Route web traffic
+          - path: /.*
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "wcag.fullname" . }}-frontend
+                port:
+                  number: 80

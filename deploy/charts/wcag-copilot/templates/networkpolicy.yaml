@@ -1,0 +1,70 @@
+# Default deny all ingress within the namespace to enforce zero-trust security
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "wcag.fullname" . }}-default-deny-ingress
+  namespace: {{ .Values.global.namespace }}
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+---
+# Allow all traffic to the API Gateway from outside (Ingress controller)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "wcag.fullname" . }}-allow-api-gateway
+  namespace: {{ .Values.global.namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      service: api-gateway
+  ingress:
+    - ports:
+        - protocol: TCP
+          port: 8000
+  policyTypes:
+    - Ingress
+---
+# Allow all traffic to the Frontend from outside (Ingress controller)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "wcag.fullname" . }}-allow-frontend
+  namespace: {{ .Values.global.namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      service: frontend
+  ingress:
+    - ports:
+        - protocol: TCP
+          port: 80
+  policyTypes:
+    - Ingress
+---
+# Allow access to downstream microservices ONLY from the API Gateway
+{{- range $serviceName, $service := .Values.services }}
+{{- if and (gt (int $service.port) 0) (not (contains $serviceName "api-gateway")) (not (contains $serviceName "frontend")) }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "wcag.fullname" $ }}-allow-{{ $serviceName }}-ingress
+  namespace: {{ $.Values.global.namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      service: {{ $serviceName }}
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              service: api-gateway
+      ports:
+        - protocol: TCP
+          port: {{ $service.port }}
+  policyTypes:
+    - Ingress
+---
+{{- end }}
+{{- end }}

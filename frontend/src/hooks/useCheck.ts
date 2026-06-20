@@ -10,9 +10,13 @@ export function useCheck() {
     setLoading(true);
     setError(null);
     try {
+      const token = localStorage.getItem("token");
       const res = await fetch("http://localhost:8000/api/check", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { 
+          "Content-Type": "application/json",
+          ...(token ? { "Authorization": `Bearer ${token}` } : {})
+        },
         body: JSON.stringify({ input }),
       });
       if (!res.ok) throw new Error(`API error: ${res.status}`);

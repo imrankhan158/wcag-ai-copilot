@@ -1,0 +1,23 @@
+{{- range $serviceName, $service := .Values.services }}
+{{- if gt (int $service.port) 0 }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "wcag.fullname" $ }}-{{ $serviceName }}
+  namespace: {{ $.Values.global.namespace }}
+  labels:
+    {{- include "wcag.labels" $ | nindent 4 }}
+    service: {{ $serviceName }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ $service.port }}
+      targetPort: {{ $service.port }}
+      protocol: TCP
+      name: http
+  selector:
+    app: {{ include "wcag.name" $ }}
+    service: {{ $serviceName }}
+---
+{{- end }}
+{{- end }}

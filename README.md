@@ -1,198 +1,159 @@
-# 🤖 WCAG AI Copilot: Enterprise-Grade RAG Accessibility Advisor
+# 🤖 WCAG AI Copilot: Enterprise-Grade Microservices Accessibility Advisor
 
-A premium, end-to-end full-stack AI platform designed to audit web code markup and live public URLs against the official **WCAG 2.2 guidelines**. Powered by a conversational RAG pipeline, a custom multi-step LangGraph workflow, hybrid dense-sparse vector search, and a secure PostgreSQL-backed user history layer.
+A premium, production-grade, horizontally-scalable AI platform designed to audit web code markup and live public URLs against the official **WCAG 2.2 guidelines**. Decomposed into containerized microservices utilizing a conversational RAG pipeline, a custom multi-step LangGraph agent, hybrid dense-sparse vector search, and a unified primary-replica PostgreSQL storage layer.
 
 ---
 
 ## 📐 1. System Architecture
 
-The WCAG AI Copilot is built as a highly decoupled, modern AI-native web application. The frontend functions as a stateless client that strictly routes all requests through the FastAPI gateway, which handles scraping, vector search, agent execution, and session vaulting:
+The WCAG AI Copilot operates on a modern, decoupled microservices topology. All incoming traffic routes through the API Gateway, which manages JWT authentication, token-bucket rate limiting, and request proxying downstream.
 
 ```mermaid
 graph TD
-    subgraph "Frontend (React and TypeScript)"
-        UI[App.tsx Dashboard]
-        Gate[Session Gate / Auth]
-        Side[History Sidebar]
-        QA[Advisor QA Pane]
-        Pane[Advisor Workspace Pane]
+    subgraph "Edge & Edge Proxy Layer"
+        UI[React Frontend Dashboard<br/>Port 3001]
+        GW[API Gateway<br/>Port 8000]
     end
 
-    subgraph "Backend (FastAPI and Python)"
-        API[FastAPI Routers]
-        AuthHandler[JWT & Bcrypt Security]
-        Scraper[Playwright Scraper]
-        Graph[LangGraph Agent Graph]
+    subgraph "Core Microservices"
+        AuthSvc[🔐 Auth Service<br/>Port 8001]
+        AuditSvc[🤖 Audit Service<br/>Port 8003]
+        QASvc[💬 QA Service<br/>Port 8004]
+        HistSvc[📚 History Service<br/>Port 8005]
+        CritSvc[📋 Criteria Service<br/>Port 8006]
+        IngSvc[📥 Ingestion Service<br/>Port 8007]
     end
 
-    subgraph "Storage Layer"
-        Postgres[(PostgreSQL Database)]
-        Qdrant[(Qdrant Hybrid Vector DB)]
+    subgraph "Asynchronous Workers & Queues"
+        SQS["Amazon SQS Queues<br/>scrape-requests · scrape-results"]
+        S3["Amazon S3 Bucket<br/>wcag-scraper-cache"]
+        Worker["🕷️ Scraper Worker<br/>Playwright Context Pool"]
+        Redis["Redis Cache & Pub/Sub<br/>Rate limits · Caches · SSE"]
+    end
+
+    subgraph "Data & Vector Layer"
+        PGB_W["primary-bouncer (PgBouncer)<br/>Port 6432 (Write)"]
+        PGB_R["replica-bouncer (PgBouncer)<br/>Port 6433 (Read-Only)"]
+
+        DB_P[(postgres-primary<br/>wcag_copilot)]
+        DB_R[(postgres-replica)]
+        
+        Qdrant[(Qdrant Vector DB Cluster<br/>wcag_criteria)]
     end
 
     %% Connections
-    UI -->|Session Init| API
-    Gate -->|Login and Register Requests| API
-    Side -->|History Queries and Detail Lookups| API
-    QA -->|Send Chat Messages| API
-    Pane -->|Execute Code Audits| API
+    UI -->|HTTP / SSE| GW
+    GW -->|/api/auth/*| AuthSvc
+    GW -->|/api/check, /api/chat| AuditSvc
+    GW -->|/api/chat/qa| QASvc
+    GW -->|/api/history/*| HistSvc
+    GW -->|/api/criteria/*| CritSvc
+
+    %% Core Services DB Links
+    AuthSvc -->|Verify Credentials| PGB_W --> DB_P
+    AuthSvc -->|Blacklist Check| Redis
     
-    API -->|Authenticate and Fetch Logs| Postgres
-    API -->|Query Vector Context| Qdrant
-    API -->|Scrape Target HTML| Scraper
-    API -->|Execute Agentic Nodes| Graph
-    Graph -->|Retrieve Dense and Sparse Vectors| Qdrant
+    AuditSvc -->|Save Audits (Write)| PGB_W --> DB_P
+    AuditSvc -->|Read Audits| PGB_R --> DB_R
+    AuditSvc -->|Query Criteria| CritSvc
+    AuditSvc -->|Async Scrape Job| SQS
+    
+    Worker -->|Read Jobs| SQS
+    Worker -->|Save Scraped HTML| S3
+    Worker -->|Update Job State| Redis
+    
+    QASvc -->|Save Conversations (Write)| PGB_W --> DB_P
+    QASvc -->|Query Context| Qdrant
+    QASvc -->|Publish SSE Stream Tokens| Redis
+    
+    HistSvc -->|Aggregate Reads| PGB_R --> DB_R
+    
+    CritSvc -->|Cache Hits| Redis
+    CritSvc -->|Get Vector Data| Qdrant
+    
+    IngSvc -->|Upsert Chunks & Vectors| Qdrant
 ```
 
 ---
 
-## 🚀 2. Core Features
+## 🚀 2. Core Service Catalog
 
-### 🕵️‍♂️ Intelligent Accessibility Audits
-- **Markup Auditing**: Paste raw HTML, CSS, or JSX directly into the editor for compliance evaluation.
-- **Headless Live URL Scanner**: Provide any public website URL. The backend spins up a headless **Playwright** browser, scrapes the dynamic DOM hierarchy, cleans extraneous nodes (like metadata and scripts) to optimize token windows, and evaluates it.
-
-### 🔗 Multi-Step LangGraph Agent
-- Evaluates code against accessibility criteria through a state-mutating directed graph:
-  - **Analyze Node**: Extracts page structure and retrieves relevant guidelines.
-  - **Evaluate Node**: Pins code elements against WCAG guidelines using GPT-4o.
-  - **Suggest Node**: Formulates precise, copy-paste-ready HTML/CSS code corrections and calculates violation scores.
-
-### 📚 Conversational RAG Q&A
-- A dedicated chat pane powered by **Conversational RAG**. It takes natural language developer questions, queries a hybrid vector index containing the 86 official WCAG success criteria and techniques, and streams context-grounded answers token-by-token.
-
-### 🔐 Secure Database Vault
-- Center-gated authentication wrapper utilizing secure password hashing (`bcrypt`) and stateless `HS256` JWT tokens.
-- Persistent SQL storage logging user audits, violations, message threads, and conversation metadata, loaded instantly via a collapsible side history drawer.
+| Service | Port | Database | Key Responsibility |
+|---|---|---|---|
+| **API Gateway** | `8000` | — | Edge routing, JWT validation, Redis token-bucket rate limiting |
+| **Auth Service** | `8001` | `wcag_copilot` (PG 5432/5442) | User registration, login, and RS256 token signing |
+| **Audit Service** | `8003` | `wcag_copilot` (PG 5432/5442) | LangGraph accessibility agent (`analyze` → `evaluate` → `suggest`) |
+| **QA Service** | `8004` | `wcag_copilot` (PG 5432/5442) | RAG-based conversational chat via Server-Sent Events (SSE) |
+| **History Service** | `8005` | `wcag_copilot` (PG 5432/5442) | Aggregated audits + conversation session retrieval and search |
+| **Criteria Service** | `8006` | Qdrant | Reads criteria from vector index with Redis caching |
+| **Ingestion Service** | `8007` | Qdrant | Headless W3C specification crawler and vector database seeder |
+| **Scraper Worker** | — | — | Headless Playwright crawling consumer polling SQS queues |
 
 ---
 
 ## 🛠 3. Technical Implementation Details
 
-### Hybrid Vector Search (Dense + Sparse)
-The ingestion pipeline crawls official W3C guidelines and indexes them into **Qdrant** using a dual-embedding strategy:
-*   **Dense Vectors**: Generated via FastEmbed (`text-embedding-3-small` equivalent) to capture semantic and conceptual relationships.
-*   **Sparse Vectors**: Generated via SPLADE (`prithivida/Splade_PP_en_v1`) to perform precise keyword matching, ensuring that references to specific Success Criteria numbers (e.g., `1.4.11`) or WCAG techniques (e.g., `G207`) are resolved with absolute accuracy.
-
-### Relational Database Schema (PostgreSQL)
-The application logs session metadata asynchronously using **SQLAlchemy** on top of `asyncpg` to prevent blocking FastAPI’s event loop during heavy computational workloads:
-
-```mermaid
-erDiagram
-    USERS {
-        uuid id PK
-        string email UK
-        string hashed_password
-        timestamp created_at
-    }
-    CONVERSATIONS {
-        uuid id PK
-        uuid user_id FK
-        string title
-        timestamp created_at
-    }
-    MESSAGES {
-        uuid id PK
-        uuid conversation_id FK
-        string role "user | assistant"
-        text content
-        timestamp created_at
-    }
-    AUDITS {
-        uuid id PK
-        uuid user_id FK
-        string input_type "code | url"
-        text input_content
-        text summary
-        integer score_a
-        integer score_aa
-        integer score_aaa
-        integer score_total
-        timestamp created_at
-    }
-    AUDIT_VIOLATIONS {
-        uuid id PK
-        uuid audit_id FK
-        string criterion_id
-        string title
-        string level "A | AA | AAA"
-        text issue
-        text element
-        text fix
-        text explanation
-    }
-
-    USERS ||--o{ CONVERSATIONS : "starts"
-    USERS ||--o{ AUDITS : "performs"
-    CONVERSATIONS ||--o{ MESSAGES : "contains"
-    AUDITS ||--o{ AUDIT_VIOLATIONS : "detects"
-```
+### Database Consolidation & High-Scale Caching
+*   **Unified postgres Storage**: All core services leverage a single database instance (`wcag_copilot`). Decoupling is maintained in code via unique table configurations (`users`, `audits`, `audit_violations`, `conversations`, `messages`).
+*   **Composite monthly Partitioning**: Composite primary keys on `created_at` timestamp support PostgreSQL range partitioning on high-volume tables (`audits`, `audit_violations`, `messages`).
+*   **PgBouncer Poolers**: Traffic spikes are mitigated via PgBouncer connections:
+    - `primary-bouncer` on port `6432` manages write transactions targeting `postgres-primary`.
+    - `replica-bouncer` on port `6433` manages read-only transactions targeting the standby `postgres-replica` (port `5442`).
+*   **Raft Consensus Vector Cluster**: A 3-node Qdrant consensus cluster handles vector storage.
+*   **Hybrid Dense-Sparse Retrievals**: Semantic dense embeddings (FastEmbed) are combined with precise token sparse representations (SPLADE) via Reciprocal Rank Fusion (RRF) inside the Criteria Service.
 
 ---
 
 ## 📦 4. Installation & Local Setup
 
 ### Prerequisites
-Make sure you have Docker, Node.js (v18+), and Python 3.12+ (with the `uv` package manager) installed.
+Make sure you have Docker, Node.js (v20+), and Python 3.12+ (with the `uv` package manager) installed.
 
-### 1. Database & Qdrant Containers
-Spin up Qdrant and PostgreSQL:
+### 1. Boot up Infrastructure and Microservices
+Start all containers (Postgres primary/standby, PgBouncers, Redis, Qdrant cluster, AWS LocalStack/Floci clone, workers, and microservices):
 ```bash
 docker compose up -d
 ```
 
-### 2. Configure Environment Variables
-Create a `.env` file in the root directory:
-```env
-# PostgreSQL Configuration
-POSTGRES_HOST=localhost
-POSTGRES_PORT=5432
-POSTGRES_DB=wcag_ai
-POSTGRES_USER=admin
-POSTGRES_PASSWORD=admin123
+### 2. Seeding WCAG Guidance Chunks
+Seeding is handled by a standalone Ingestion Service. Trigger a full crawling run:
+```bash
+# Verify the ingestion service is healthy
+curl http://localhost:8007/health
 
-# Vector Database
-QDRANT_URL=http://localhost:6333
-QDRANT_COLLECTION=wcag_criteria
-
-# OpenAI Core
-OPENAI_API_KEY=your_openai_api_key_here
-
-# JWT Configuration
-JWT_SECRET_KEY=your_secure_jwt_secret_key
+# Trigger 50-page crawl and seed
+curl -X POST http://localhost:8007/ingest \
+  -H "Content-Type: application/json" \
+  -d '{"max_pages": 50, "batch_size": 32}'
 ```
 
-### 3. Ingest Accessibility Guidance
-Run the document crawler to scrape, chunk, and embed official WCAG techniques into Qdrant:
+### 3. Run Smoke Tests
+Verify the overall platform status, API routing, streaming, and database scaling layers:
 ```bash
-# Dry run verification (limit to 20 pages, no writes)
-uv run python -m app.ingestion.ingest --max-pages 20 --dry-run
-
-# Run full ingestion
-uv run python -m app.ingestion.ingest --max-pages 250
-```
-
-### 4. Run the Backend API
-Install Python dependencies and start the uvicorn API reload server:
-```bash
+# Project workspace setup
 uv sync
-uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
-```
-*The database tables will be auto-created on application startup.*
 
-### 5. Run the React Frontend
-Navigate to the frontend folder, install packages, and start Vite:
+# Run the unified platform smoke test
+uv run scratch/smoke_test.py
+```
+The smoke test automatically validates:
+- **Database Scaling (Phase 6)**: Replication synchronization, standby read-only constraints, Range Partition routing, and bouncer connection pools.
+- **Vector DB Health**: Qdrant 3-node Raft consensus cluster peer checks.
+- **Edge Gateway & API (Phase 5)**: Auth logins/registrations, LangGraph audit checks, SSE chatbot token streaming, history logs, and success criteria mapping.
+
+### 4. Run the React Dashboard
+Navigate to the frontend folder, install dependencies, and start Vite:
 ```bash
 cd frontend
 npm install
 npm run dev
 ```
-*Access the dashboard at `http://localhost:5173`.*
+*Access the user interface dashboard at `http://localhost:3001`.*
 
 ---
 
 ## ♿ 5. UI Accessibility Conformance
-The frontend is designed to comply with WCAG 2.2 guidelines:
-*   **WAI-ARIA status logs**: Streaming thought containers use `role="log"` and `aria-live="polite"` so updates are announced dynamically to screen readers.
-*   **Label controls**: Form fields, filter groups, and search inputs are paired with descriptive `<label>` links (using Tailwind's `sr-only` to keep the UI clean but accessible).
-*   **Visible Focus States**: Custom blue borders (`focus:ring-blue-500`) are active across all form inputs and button selections to aid keyboard-only navigation.
+The frontend complies with WCAG 2.2 accessibility guidelines:
+*   **Aria Log Announcers**: Live audit logs and streaming responses use `role="log"` and `aria-live="polite"`.
+*   **Accessible Controls**: Forms and search inputs are bound to visually hidden but accessible `<label>` attributes.
+*   **Keyboard Navigation**: Highly visible focus indicators (`focus:ring-blue-500`) are active across all selectable controls.

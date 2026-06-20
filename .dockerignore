@@ -1,0 +1,41 @@
+# Version control
+.git
+.gitignore
+
+# Python virtual environments and caches
+.venv
+.uv-cache
+__pycache__
+*.pyc
+*.pyo
+*.egg-info
+
+# Node.js
+frontend/node_modules
+frontend/dist
+
+# Environment files (secrets must not be baked into images)
+.env
+.env.*
+!.env.example
+
+# Data volumes (managed by docker-compose volumes)
+data/
+
+# IDE / Editor config
+.vscode
+.idea
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Documentation (not needed in image)
+*.md
+!README.md
+
+# Docker files (avoid recursive builds)
+Dockerfile
+docker-compose.yml
